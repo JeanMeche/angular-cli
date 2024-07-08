@@ -82,6 +82,7 @@ ts_library(
         "@npm//esbuild",
         "@npm//fast-glob",
         "@npm//https-proxy-agent",
+        "@npm//image-size",
         "@npm//lmdb",
         "@npm//magic-string",
         "@npm//mrmime",

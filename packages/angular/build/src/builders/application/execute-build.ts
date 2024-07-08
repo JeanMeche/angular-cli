@@ -9,7 +9,11 @@
 import { BuilderContext } from '@angular-devkit/architect';
 import { SourceFileCache } from '../../tools/esbuild/angular/source-file-cache';
 import { generateBudgetStats } from '../../tools/esbuild/budget-stats';
-import { BuildOutputFileType, BundlerContext } from '../../tools/esbuild/bundler-context';
+import {
+  BuildOutputFileType,
+  BundleContextResult,
+  BundlerContext,
+} from '../../tools/esbuild/bundler-context';
 import { ExecutionResult, RebuildState } from '../../tools/esbuild/bundler-execution-result';
 import { checkCommonJSModules } from '../../tools/esbuild/commonjs-checker';
 import { extractLicenses } from '../../tools/esbuild/license-extractor';
@@ -24,6 +28,7 @@ import { executePostBundleSteps } from './execute-post-bundle';
 import { inlineI18n, loadActiveTranslations } from './i18n';
 import { NormalizedApplicationBuildOptions } from './options';
 import { setupBundlerContexts } from './setup-bundling';
+import { inlineStaticImageDimensions } from './image';
 
 export async function executeBuild(
   options: NormalizedApplicationBuildOptions,
@@ -43,7 +48,6 @@ export async function executeBuild(
     colors,
     jsonLogs,
   } = options;
-
   // TODO: Consider integrating into watch mode. Would require full rebuild on target changes.
   const browsers = getSupportedBrowsers(projectRoot, context.logger);
 
@@ -67,6 +71,21 @@ export async function executeBuild(
     rebuildState?.fileChanges.all,
   );
 
+  const executionResult = new ExecutionResult(bundlerContexts, codeBundleCache);
+
+  /////
+  if (bundlingResult.errors) {
+    return executionResult;
+  }
+
+  const result = await inlineStaticImageDimensions(
+    options,
+    executionResult,
+    bundlingResult,
+    bundlingResult.outputFiles,
+  );
+  ////
+
   if (options.optimizationOptions.scripts && shouldOptimizeChunks) {
     bundlingResult = await profileAsync('OPTIMIZE_CHUNKS', () =>
       optimizeChunks(
@@ -76,7 +95,6 @@ export async function executeBuild(
     );
   }
 
-  const executionResult = new ExecutionResult(bundlerContexts, codeBundleCache);
   executionResult.addWarnings(bundlingResult.warnings);
 
   // Return if the bundling has errors

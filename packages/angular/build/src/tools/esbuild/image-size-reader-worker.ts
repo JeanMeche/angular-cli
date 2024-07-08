@@ -7,47 +7,29 @@
  */
 
 import remapping, { SourceMapInput } from '@ampproject/remapping';
-import { PluginObj, parseSync, transformFromAstAsync, types } from '@babel/core';
+import { PluginObj, parseSync, transformFromAstAsync, types, type NodePath } from '@babel/core';
 import assert from 'node:assert';
 import { workerData } from 'node:worker_threads';
 import { assertIsError } from '../../utils/error';
-import { loadEsmModule } from '../../utils/load-esm';
-
-/**
- * The options passed to the inliner for each file request
- */
-interface InlineRequest {
-  /**
-   * The filename that should be processed. The data for the file is provided to the Worker
-   * during Worker initialization.
-   */
-  filename: string;
-  /**
-   * The locale specifier that should be used during the inlining process of the file.
-   */
-  locale: string;
-  /**
-   * The translation messages for the locale that should be used during the inlining process of the file.
-   */
-  translation?: Record<string, unknown>;
-}
+import * as fs from 'fs';
+import * as path from 'path';
+import { imageSize } from 'image-size';
 
 // Extract the application files and common options used for inline requests from the Worker context
 // TODO: Evaluate overall performance difference of passing translations here as well
-const { files, missingTranslation, shouldOptimize } = (workerData || {}) as {
+const { files, shouldOptimize } = (workerData || {}) as {
   files: ReadonlyMap<string, Blob>;
-  missingTranslation: 'error' | 'warning' | 'ignore';
   shouldOptimize: boolean;
 };
 
 /**
- * Inlines the provided locale and translation into a JavaScript file that contains `$localize` usage.
+ * Inlines staic image dimensions when the image directive is used
  * This function is the main entry for the Worker's action that is called by the worker pool.
  *
  * @param request An InlineRequest object representing the options for inlining
  * @returns An array containing the inlined file and optional map content.
  */
-export default async function inlineLocale(request: InlineRequest) {
+export default async function inlineStaticImageDimensions(request: { filename: string }) {
   const data = files.get(request.filename);
 
   assert(data !== undefined, `Invalid inline request for file '${request.filename}'.`);
@@ -64,33 +46,7 @@ export default async function inlineLocale(request: InlineRequest) {
     file: request.filename,
     code: result.code,
     map: result.map,
-    messages: result.diagnostics.messages,
   };
-}
-
-/**
- * A Type representing the localize tools module.
- */
-type LocalizeUtilityModule = typeof import('@angular/localize/tools');
-
-/**
- * Cached instance of the `@angular/localize/tools` module.
- * This is used to remove the need to repeatedly import the module per file translation.
- */
-let localizeToolsModule: LocalizeUtilityModule | undefined;
-
-/**
- * Attempts to load the `@angular/localize/tools` module containing the functionality to
- * perform the file translations.
- * This module must be dynamically loaded as it is an ESM module and this file is CommonJS.
- */
-async function loadLocalizeTools(): Promise<LocalizeUtilityModule> {
-  // Load ESM `@angular/localize/tools` using the TypeScript dynamic import workaround.
-  // Once TypeScript provides support for keeping the dynamic import this workaround can be
-  // changed to a direct dynamic import.
-  localizeToolsModule ??= await loadEsmModule<LocalizeUtilityModule>('@angular/localize/tools');
-
-  return localizeToolsModule;
 }
 
 /**
@@ -99,31 +55,55 @@ async function loadLocalizeTools(): Promise<LocalizeUtilityModule> {
  * @param translation A object record containing locale specific messages to use.
  * @returns An array of Babel plugins.
  */
-async function createI18nPlugins(locale: string, translation: Record<string, unknown> | undefined) {
-  const { Diagnostics, makeEs2015TranslatePlugin } = await loadLocalizeTools();
-
+function createPlugins(dirname: string) {
   const plugins: PluginObj[] = [];
-  const diagnostics = new Diagnostics();
 
-  plugins.push(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    makeEs2015TranslatePlugin(diagnostics, (translation || {}) as any, {
-      missingTranslation: translation === undefined ? 'ignore' : missingTranslation,
-    }),
-  );
-
-  // Create a plugin to replace the locale specifier constant inject by the build system with the actual specifier
   plugins.push({
+    name: 'inline-static-image-dimensions',
     visitor: {
-      StringLiteral(path) {
-        if (path.node.value === '___NG_LOCALE_INSERT___') {
-          path.replaceWith(types.stringLiteral(locale));
+      CallExpression(callPath: NodePath<types.CallExpression>, state) {
+        const { callee, arguments: args } = callPath.node;
+        if (types.isIdentifier(callee)) {
+          console.log(callee.name);
+        }
+        if (types.isIdentifier(callee) && callee.name === 'ɵɵoptimizedImage' && args.length > 0) {
+          const arg = args[0];
+          if (types.isStringLiteral(arg)) {
+            const imgPath = arg.value;
+            if (/\.(jpg|jpeg|png|gif|svg|webp)$/.test(imgPath)) {
+              const imagePath = path.resolve(dirname, imgPath);
+              console.log('path', imagePath);
+              if (fs.existsSync(imagePath)) {
+                const dimensions = imageSize(imagePath);
+                if (dimensions) {
+                  console.log(
+                    `Image: ${imgPath}, Width: ${dimensions.width}, Height: ${dimensions.height}`,
+                    '\n',
+                  );
+
+                  const { width, height } = dimensions;
+                  if (!width || !height) {
+                    console.log('ici ????', '\n');
+                    // TODO: throw a warning;
+                    return;
+                  }
+                  console.log('la!!!!!!!', '\n');
+                  // Create new arguments for width and height
+                  const widthArg = types.numericLiteral(width);
+                  const heightArg = types.numericLiteral(height);
+
+                  // Add width and height to the call expression arguments
+                  callPath.node.arguments.push(widthArg, heightArg);
+                }
+              }
+            }
+          }
         }
       },
     },
   });
 
-  return { diagnostics, plugins };
+  return plugins;
 }
 
 /**
@@ -136,7 +116,7 @@ async function createI18nPlugins(locale: string, translation: Record<string, unk
 async function transformWithBabel(
   code: string,
   map: SourceMapInput | undefined,
-  options: InlineRequest,
+  options: { filename: string },
 ) {
   let ast;
   try {
@@ -154,14 +134,16 @@ async function transformWithBabel(
     // Which makes it hard to find the actual error message.
     const index = error.message.indexOf(')\n');
     const msg = index !== -1 ? error.message.slice(0, index + 1) : error.message;
-    throw new Error(`${msg}\nAn error occurred inlining file "${options.filename}"`);
+    throw new Error(`${msg}\nAn error occurred inlining image size in file "${options.filename}"`);
   }
 
   if (!ast) {
     throw new Error(`Unknown error occurred inlining file "${options.filename}"`);
   }
 
-  const { diagnostics, plugins } = await createI18nPlugins(options.locale, options.translation);
+  // TODO should come from param
+  const plugins = createPlugins('src');
+
   const transformResult = await transformFromAstAsync(ast, code, {
     filename: options.filename,
     // false is a valid value but not included in the type definition
@@ -183,5 +165,5 @@ async function transformWithBabel(
     outputMap = remapping([transformResult.map as SourceMapInput, map], () => null);
   }
 
-  return { code: transformResult.code, map: outputMap && JSON.stringify(outputMap), diagnostics };
+  return { code: transformResult.code, map: outputMap && JSON.stringify(outputMap) };
 }
