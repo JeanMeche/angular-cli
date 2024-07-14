@@ -221,5 +221,9 @@
   },
   "resolutions": {
     "@bazel/concatjs@npm:5.8.1": "patch:@bazel/concatjs@npm%3A5.8.1#~/.yarn/patches/@bazel-concatjs-npm-5.8.1-1bf81df846.patch"
+  },
+  "dependencies": {
+    "acorn-import-assertions": "^1.9.0",
+    "image-size": "^1.1.1"
   }
 }

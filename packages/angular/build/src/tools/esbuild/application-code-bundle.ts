@@ -24,6 +24,7 @@ import { createSourcemapIgnorelistPlugin } from './sourcemap-ignorelist-plugin';
 import { getFeatureSupport, isZonelessApp } from './utils';
 import { createVirtualModulePlugin } from './virtual-module-plugin';
 import { createWasmPlugin } from './wasm-plugin';
+import { createImageLoaderWithAttributePlugin } from './image-loader-plugin';
 
 export function createBrowserCodeBundleOptions(
   options: NormalizedApplicationBuildOptions,
@@ -53,6 +54,7 @@ export function createBrowserCodeBundleOptions(
     target,
     supported: getFeatureSupport(target, zoneless),
     plugins: [
+      createImageLoaderWithAttributePlugin(),
       createWasmPlugin({ allowAsync: zoneless, cache: sourceFileCache?.loadResultCache }),
       createSourcemapIgnorelistPlugin(),
       createCompilerPlugin(
@@ -210,6 +212,8 @@ export function createServerCodeBundleOptions(
     entryPoints,
     supported: getFeatureSupport(target, zoneless),
     plugins: [
+      createImageLoaderWithAttributePlugin(),
+      //createLoaderImportAttributePlugin(),
       createWasmPlugin({ allowAsync: zoneless, cache: sourceFileCache?.loadResultCache }),
       createSourcemapIgnorelistPlugin(),
       createCompilerPlugin(
